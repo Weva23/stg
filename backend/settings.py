@@ -70,13 +70,17 @@ TEMPLATES = [
 WSGI_APPLICATION = 'backend.wsgi.application'
 
 
-# Database
+# Database Configuration (Correction)
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.PostgreSQL',  # PostgreSQL
+        'NAME': 'consultant_db',  # Nom de la base de données
+        'USER': 'postgres',  # Nom d'utilisateur PostgreSQL
+        'PASSWORD': 'odoo',  # Mot de passe
+        'HOST': 'localhost',  # Serveur de la BD
+        'PORT': '5432',  # Port PostgreSQL (5432 par défaut)
     }
 }
 
@@ -121,23 +125,3 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'consultant_db', 
-        'USER': 'postgres',   
-        'PASSWORD': 'ton_mot_de_passe',  
-        'HOST': 'localhost',  
-        'PORT': '5432',  
-    }
-}
-
-
-
-
-
-
-

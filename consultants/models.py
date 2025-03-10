@@ -1,29 +1,61 @@
 from django.db import models
 
-
 class Consultant(models.Model):
-    nom = models.CharField(max_length=100, null=True, blank=True)
-    email = models.EmailField(unique=True, null=True, blank=True)
-    telephone = models.CharField(max_length=20, null=True, blank=True)
-    domaine_principal = models.CharField(max_length=50, null=True, blank=True)
-    experience_totale = models.IntegerField(default=0)
+    nom = models.CharField(max_length=50)
+    prenom = models.CharField(max_length=50)
+    email = models.EmailField(unique=True)
+    telephone = models.CharField(max_length=20)
+    pays = models.CharField(max_length=50)
+    ville = models.CharField(max_length=50)
     disponibilite = models.BooleanField(default=True)
-    competences = models.TextField(null=True, blank=True)  # Stocker les compétences sous forme de texte
-    cv_fichier = models.FileField(upload_to='cvs/')  # Stocker le fichier CV
 
     def __str__(self):
-        return self.nom if self.nom else "Consultant sans nom"
+        return f"{self.nom} {self.prenom}"
 
-class AppelOffre(models.Model):
-    titre = models.CharField(max_length=255)
-    organisme = models.CharField(max_length=255)
-    budget = models.DecimalField(max_digits=10, decimal_places=2)
-    date_limite = models.DateField()
-    statut = models.CharField(choices=[('Ouvert', 'Ouvert'), ('Clôturé', 'Clôturé')], max_length=10)
+class Competence(models.Model):
+    NIVEAU_CHOICES = [
+        ('Débutant', 'Débutant'),
+        ('Intermédiaire', 'Intermédiaire'),
+        ('Expert', 'Expert'),
+    ]
+    
+    consultant = models.ForeignKey(Consultant, on_delete=models.CASCADE, related_name="competences")
+    nom_competence = models.CharField(max_length=100)
+    niveau = models.CharField(max_length=20, choices=NIVEAU_CHOICES)
 
-class Mission(models.Model):
-    consultant = models.ForeignKey(Consultant, on_delete=models.CASCADE)
-    appel_offre = models.ForeignKey(AppelOffre, on_delete=models.CASCADE)
+    def __str__(self):
+        return f"{self.nom_competence} ({self.niveau})"
+
+class Experience(models.Model):
+    consultant = models.ForeignKey(Consultant, on_delete=models.CASCADE, related_name="experiences")
+    entreprise = models.CharField(max_length=100)
+    poste = models.CharField(max_length=100)
     date_debut = models.DateField()
-    date_fin = models.DateField()
-    statut = models.CharField(choices=[('Assignée', 'Assignée'), ('En cours', 'En cours'), ('Terminée', 'Terminée')], max_length=10)
+    date_fin = models.DateField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.poste} chez {self.entreprise}"
+
+class Document(models.Model):
+    TYPE_DOCUMENT_CHOICES = [
+        ('CV', 'CV'),
+        ('Diplôme', 'Diplôme'),
+        ('Contrat', 'Contrat'),
+    ]
+    
+    consultant = models.ForeignKey(Consultant, on_delete=models.CASCADE, related_name="documents")
+    nom_fichier = models.FileField(upload_to='documents/')
+    type_document = models.CharField(max_length=50, choices=TYPE_DOCUMENT_CHOICES)
+    date_upload = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.nom_fichier} ({self.type_document})"
+
+class HistoriqueMission(models.Model):
+    consultant = models.ForeignKey(Consultant, on_delete=models.CASCADE, related_name="missions")
+    id_mission = models.IntegerField()  # Lien vers une autre BD "Mission"
+    role = models.CharField(max_length=50)
+    evaluation = models.PositiveIntegerField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Mission {self.id_mission} - {self.role}"
