@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'consultants'
 ]
 
 MIDDLEWARE = [
@@ -72,17 +73,17 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 # Database Configuration (Correction)
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
-
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.PostgreSQL',  # PostgreSQL
-        'NAME': 'consultant_db',  # Nom de la base de données
-        'USER': 'postgres',  # Nom d'utilisateur PostgreSQL
-        'PASSWORD': 'odoo',  # Mot de passe
-        'HOST': 'localhost',  # Serveur de la BD
-        'PORT': '5432',  # Port PostgreSQL (5432 par défaut)
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'yrbi',  # Remplace par le nom de ta base
+        'USER': 'root',  # Remplace par ton utilisateur MySQL
+        'PASSWORD': '',  # Mets ton mot de passe MySQL
+        'HOST': 'localhost',
+        'PORT': '3306',  # Port MySQL par défaut
     }
 }
+
 
 
 # Password validation
