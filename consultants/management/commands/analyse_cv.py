@@ -15,45 +15,33 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 # Chargement du modèle SpaCy pour le français
 nlp = spacy.load("fr_core_news_sm")
 
-# Liste des villes et pays associés
-CITY_COUNTRY_MAP = {
-    "Nouakchott": "Mauritanie",
-    "Dakar": "Sénégal",
-    "Casablanca": "Maroc",
-    "Tunis": "Tunisie",
-    "Alger": "Algérie",
-    "Paris": "France",
-    "Montréal": "Canada",
-    "Bamako": "Mali",
-    "Abidjan": "Côte d'Ivoire",
-}
+# Dossier contenant les CVs
+CV_FOLDER = r"C:\Users\HP\Downloads\cvs"
 
 class Command(BaseCommand):
-    help = "Analyse tous les CVs dans un dossier et enregistre chaque consultant en base de données"
+    help = "Analyse tous les CVs dans un dossier et enregistre les informations en base de données"
 
     def handle(self, *args, **kwargs):
-        cv_folder = r"C:\Users\HP\Downloads\cvs"
-
-        if not os.path.exists(cv_folder):
-            self.stdout.write(self.style.ERROR(f"Le dossier {cv_folder} n'existe pas."))
+        if not os.path.exists(CV_FOLDER):
+            self.stdout.write(self.style.ERROR(f"❌ Le dossier {CV_FOLDER} n'existe pas."))
             return
 
-        pdf_files = [f for f in os.listdir(cv_folder) if f.endswith(".pdf")]
+        pdf_files = [f for f in os.listdir(CV_FOLDER) if f.endswith(".pdf")]
 
         if not pdf_files:
-            self.stdout.write(self.style.WARNING("Aucun fichier PDF trouvé dans le dossier."))
+            self.stdout.write(self.style.WARNING("⚠️ Aucun fichier PDF trouvé dans le dossier."))
             return
 
         for pdf_file in pdf_files:
-            pdf_path = os.path.join(cv_folder, pdf_file)
-            print(f"\nTraitement du fichier : {pdf_file}")
+            pdf_path = os.path.join(CV_FOLDER, pdf_file)
+            print(f"\n📄 Traitement du fichier : {pdf_file}")
 
             cv_data = self.extract_cv_data(pdf_path)
 
             if cv_data:
                 self.save_cv_to_db(cv_data)
             else:
-                print(f"Aucune donnée extraite pour {pdf_file}.")
+                print(f"⚠️ Aucune donnée extraite pour {pdf_file}.")
 
     def extract_cv_data(self, pdf_path):
         """Extraction des informations depuis un CV PDF"""
@@ -61,27 +49,33 @@ class Command(BaseCommand):
         text = "\n".join(page.get_text("text") for page in doc)
 
         if not text.strip():
-            print("Aucun texte détecté, utilisation de l'OCR...")
+            print("🟡 Aucun texte détecté, utilisation de l'OCR...")
             text = self.extract_text_with_ocr(doc)
 
         print("======== Texte extrait du CV ========")
         print(text)
         print("=====================================")
 
-        # Extraction des informations principales
-        email = self.extract_email(text)
+        # Nettoyage du texte pour éviter les erreurs OCR
+        clean_text = re.sub(r'\s*[@●◆■]\s*', '@', text)
+
+        # Extraction des informations
+        email = self.extract_email(clean_text)
         telephone = self.extract_phone(text)
         nom, prenom = self.extract_name_spacy(text, email)
-        ville, pays = self.extract_location(text)
         competences = self.extract_competences(text)
 
+        ville, pays = "Non spécifiée", "Non spécifié"
+        if "Nouakchott" in text:
+            ville, pays = "Nouakchott", "Mauritanie"
+
         if not email:
-            print(f"Aucun email trouvé pour {nom} {prenom}. CV ignoré.")
+            print(f"⚠️ Aucun email trouvé pour {nom} {prenom}. CV ignoré.")
             return None
 
-        print(f"Nom: {nom}, Prénom: {prenom}, Email: {email}, Téléphone: {telephone}")
-        print(f"Pays: {pays}, Ville: {ville}")
-        print(f"Compétences: {competences}")
+        print(f"✅ Nom: {nom}, Prénom: {prenom}, Email: {email}, Téléphone: {telephone}")
+        print(f"🌍 Pays: {pays}, 🏙️ Ville: {ville}")
+        print(f"📌 Compétences: {competences}")
 
         return {
             "nom": nom,
@@ -99,74 +93,62 @@ class Command(BaseCommand):
         for page_num in range(len(doc)):
             pix = doc[page_num].get_pixmap()
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            text += pytesseract.image_to_string(img, lang="fra", config="--psm 6") + "\n"
+            text += pytesseract.image_to_string(img, lang="fra+eng") + "\n"
         return text
 
     def extract_email(self, text):
         """Extraction de l'email avec validation du format"""
         email_match = re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", text)
-        return email_match.group(0) if email_match else None
+        return email_match.group(0) if email_match else "inconnu@example.com"
 
     def extract_phone(self, text):
-        """Extraction du téléphone avec correction du format"""
-        phone_match = re.search(r"\+?\d[\d\s-]{8,}\d", text)
-        return phone_match.group(0) if phone_match else "Non spécifié"
+        """Extraction du téléphone"""
+        phone_match = re.search(r"(?:\+?222)?[\s-]*(\d{2}[\s-]*){4}", text)
+        return phone_match.group(0).replace(" ", "") if phone_match else "Non spécifié"
 
     def extract_name_spacy(self, text, email=None):
-        """Utilisation de SpaCy et email pour détecter le nom et prénom"""
+        """Utilisation de SpaCy pour détecter le nom et prénom"""
         doc = nlp(text)
         noms_detectes = []
 
-        # 1️⃣ Étape 1 : Utiliser SpaCy pour détecter les noms
         for ent in doc.ents:
             if ent.label_ == "PER":
                 noms_detectes.append(ent.text)
 
-        # 2️⃣ Étape 2 : Si SpaCy ne trouve rien, essayer d'extraire depuis l'email
+        name_match = re.search(r"(?i)(Nom[:\s]+)([A-ZÀ-ÿ][a-zà-ÿ]+)", text)
+        first_name_match = re.search(r"(?i)(Prénom[:\s]+)([A-ZÀ-ÿ][a-zà-ÿ]+)", text)
+
+        if name_match and first_name_match:
+            return name_match.group(2), first_name_match.group(2)
+
         if email and not noms_detectes:
             username = email.split("@")[0]
             username_parts = re.split(r'[._-]', username)
             if len(username_parts) >= 2:
                 return username_parts[0].capitalize(), username_parts[1].capitalize()
 
-        # 3️⃣ Étape 3 : Sinon, chercher des mots en majuscule dans le texte
-        if not noms_detectes:
-            words = text.split()
-            for i in range(len(words) - 1):
-                if words[i].istitle() and words[i+1].istitle():
-                    return words[i], words[i+1]
+        first_lines = "\n".join(text.split('\n')[:5])
+        capitalized_names = re.findall(r"\b[A-ZÀ-ÿ][a-zà-ÿ]+\b", first_lines)
+        if len(capitalized_names) >= 2:
+            return capitalized_names[0], capitalized_names[1]
 
-        # 4️⃣ Étape 4 : Retourner le premier nom trouvé par SpaCy
         if noms_detectes:
             name_parts = noms_detectes[0].split()
             if len(name_parts) >= 2:
                 return name_parts[0], " ".join(name_parts[1:])
-        
+
         return "Inconnu", "Inconnu"
 
-    def extract_location(self, text):
-        """Détection de la ville et pays à partir du texte du CV"""
-        ville, pays = "Non spécifiée", "Non spécifié"
-
-        for city in CITY_COUNTRY_MAP.keys():
-            if re.search(rf"\b{city}\b", text, re.IGNORECASE):
-                ville = city
-                pays = CITY_COUNTRY_MAP[city]
-                break
-
-        return ville, pays
-
     def extract_competences(self, text):
-        """Détection des compétences techniques à partir du texte du CV"""
+        """Détection des compétences techniques"""
         competences_match = re.findall(
-            r"\b(Flask|PHP|Python|Django|Git|GitHub|Docker|Figma|Big Data|Spring Boot|Angular|Machine Learning|MySQL|MongoDB|Java|Laravel|HTML|CSS|JavaScript|React|Typescript|AWS|Oracle)\b",
+            r"\b(Flask|PHP|Python|Django|Git|GitHub|Docker|MySQL|MongoDB|Java|Spring Boot|Angular|Machine Learning|AWS|Oracle|HTML|CSS|React|Typescript)\b",
             text, re.IGNORECASE
         )
         return list(set([c.strip() for c in competences_match if c.strip()]))
 
-
     def save_cv_to_db(self, cv_data):
-        """Sauvegarde chaque consultant en base de données"""
+        """Sauvegarde les informations extraites en base de données"""
         try:
             with transaction.atomic():
                 consultant, created = Consultant.objects.update_or_create(
@@ -182,15 +164,17 @@ class Command(BaseCommand):
                     }
                 )
 
-                print(f"Consultant {cv_data['nom']} {cv_data['prenom']} {'ajouté' if created else 'mis à jour'}.")
-                
-                consultant.competences.set([
-                    Competence.objects.get_or_create(nom_competence=comp)[0]
-                    for comp in cv_data["competences"]
-                ])
+                print(f"✅ Consultant {cv_data['nom']} {cv_data['prenom']} {'ajouté' if created else 'mis à jour'}.")
 
-                print("Compétences enregistrées.")
+                if consultant and consultant.id:
+                    competences_objs = [
+                        Competence.objects.get_or_create(nom_competence=comp)[0]
+                        for comp in cv_data["competences"]
+                    ]
+                    consultant.competences.set(competences_objs)
+                    print("🎯 Compétences enregistrées.")
+                else:
+                    print("❌ Impossible d'enregistrer les compétences : Consultant non trouvé.")
 
         except Exception as e:
-            print(f"Erreur lors de l'enregistrement du consultant : {e}")
-
+            print(f"❌ Erreur lors de l'enregistrement du consultant : {e}")
