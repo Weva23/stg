@@ -69,6 +69,10 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'backend.wsgi.application'
+AUTH_USER_MODEL = 'consultants.User'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 
 # Database Configuration (Correction)
@@ -76,7 +80,7 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'hhhhh',  # Remplace par le nom de ta base
+        'NAME': 'okkk',  # Remplace par le nom de ta base
         'USER': 'root',  # Remplace par ton utilisateur MySQL
         'PASSWORD': '',  # Mets ton mot de passe MySQL
         'HOST': 'localhost',
@@ -113,6 +117,7 @@ LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 
 USE_I18N = True
+
 
 USE_TZ = True
 

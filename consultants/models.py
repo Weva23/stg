@@ -1,7 +1,23 @@
 from django.db import models
+from django.contrib.auth.models import AbstractUser
+from django.conf import settings
 
-# Consultant
+# ✅ Ton modèle User personnalisé
+class User(AbstractUser):
+    ROLES = (
+        ('ADMIN', 'Administrateur'),
+        ('CONSULTANT', 'Consultant'),
+    )
+    role = models.CharField(max_length=20, choices=ROLES, default='CONSULTANT')
+    nom = models.CharField(max_length=100)
+
+    def __str__(self):
+        return f"{self.nom} ({self.role})"
+
+
+# ✅ Ce modèle doit être séparé (en dehors du User)
 class Consultant(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="consultant_profile")
     nom = models.CharField(max_length=50)
     prenom = models.CharField(max_length=50)
     email = models.EmailField(max_length=255)
@@ -10,16 +26,17 @@ class Consultant(models.Model):
     ville = models.CharField(max_length=50)
     date_debut_dispo = models.DateField()
     date_fin_dispo = models.DateField()
+    cv = models.FileField(upload_to="cv/", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    # cv = models.FileField(upload_to="cv/", null=True, blank=True)  # Ajout du champ
 
     def __str__(self):
         return f"{self.nom} {self.prenom}"
 
+
 # Compétences
 class Competence(models.Model):
     consultant = models.ForeignKey(Consultant, on_delete=models.CASCADE, related_name="competences")
-    nom_competence = models.CharField(max_length=100)
+    nom_competence = models.CharField(max_length=1000)
     niveau = models.IntegerField()
 
     def __str__(self):

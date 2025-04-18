@@ -1,180 +1,247 @@
 from django.core.management.base import BaseCommand
-import fitz  # PyMuPDF
-import os
-import re
-import pytesseract
-import spacy
-from PIL import Image
-from consultants.models import Consultant, Competence
-from django.utils.dateparse import parse_date
 from django.db import transaction
+from dateutil.parser import parse as parse_date
+import re
+import os
+import fitz
+import logging
+from PIL import Image, ImageEnhance
+from consultants.models import Consultant, Competence
 
-# Configuration de Tesseract OCR
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+try:
+    import pytesseract
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
 
-# Chargement du modèle SpaCy pour le français
-nlp = spacy.load("fr_core_news_sm")
+logger = logging.getLogger(__name__)
 
-# Dossier contenant les CVs
-CV_FOLDER = r"C:\Users\HP\Downloads\cvs"
+# Configuration des villes Mauritanie
+CITY_COUNTRY_MAP = {
+    "Nouakchott": "Mauritanie",
+    "Nouadhibou": "Mauritanie",
+    "Rosso": "Mauritanie",
+    "Kaédi": "Mauritanie",
+    "Zouérat": "Mauritanie",
+    "Atar": "Mauritanie",
+    "Kiffa": "Mauritanie",
+    "Sélibaby": "Mauritanie",
+    "Aïoun": "Mauritanie",
+    "Tidjikja": "Mauritanie",
+}
+
+COMMON_FRENCH_NAMES = {
+    "mohamed", "mariem", "fatimetou", "abdallah", "aichetou",
+    "jean", "marie", "pierre", "sophie", "nouha", "ahmed",
+    "ali", "amina", "khadijetou", "brahim", "salma"
+}
+
+COMMON_TITLES = {
+    "développeur", "ingénieur", "manager", "chef", "projet",
+    "technicien", "spécialiste", "analyste", "consultant", "cv"
+}
 
 class Command(BaseCommand):
-    help = "Analyse tous les CVs dans un dossier et enregistre les informations en base de données"
+    help = "Extraction des informations de CV PDF"
 
-    def handle(self, *args, **kwargs):
-        if not os.path.exists(CV_FOLDER):
-            self.stdout.write(self.style.ERROR(f"❌ Le dossier {CV_FOLDER} n'existe pas."))
+    def handle(self, *args, **options):
+        cv_folder = r"C:\Users\HP\Downloads\cvs"
+        
+        if not os.path.exists(cv_folder):
+            self.stdout.write(self.style.ERROR(f"Dossier introuvable: {cv_folder}"))
             return
 
-        pdf_files = [f for f in os.listdir(CV_FOLDER) if f.endswith(".pdf")]
+        for filename in [f for f in os.listdir(cv_folder) if f.endswith(".pdf")]:
+            pdf_path = os.path.join(cv_folder, filename)
+            self.stdout.write(f"\n🔍 Traitement de {filename}...")
 
-        if not pdf_files:
-            self.stdout.write(self.style.WARNING("⚠️ Aucun fichier PDF trouvé dans le dossier."))
-            return
+            try:
+                cv_data = self.process_pdf(pdf_path)
+                if cv_data:
+                    self.save_consultant(cv_data)
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f"Erreur: {str(e)}"))
 
-        for pdf_file in pdf_files:
-            pdf_path = os.path.join(CV_FOLDER, pdf_file)
-            print(f"\n📄 Traitement du fichier : {pdf_file}")
-
-            cv_data = self.extract_cv_data(pdf_path)
-
-            if cv_data:
-                self.save_cv_to_db(cv_data)
-            else:
-                print(f"⚠️ Aucune donnée extraite pour {pdf_file}.")
-
-    def extract_cv_data(self, pdf_path):
-        """Extraction des informations depuis un CV PDF"""
-        doc = fitz.open(pdf_path)
-        text = "\n".join(page.get_text("text") for page in doc)
-
-        if not text.strip():
-            print("🟡 Aucun texte détecté, utilisation de l'OCR...")
-            text = self.extract_text_with_ocr(doc)
-
-        print("======== Texte extrait du CV ========")
-        print(text)
-        print("=====================================")
-
-        # Nettoyage du texte pour éviter les erreurs OCR
-        clean_text = re.sub(r'\s*[@●◆■]\s*', '@', text)
-
-        # Extraction des informations
-        email = self.extract_email(clean_text)
-        telephone = self.extract_phone(text)
-        nom, prenom = self.extract_name_spacy(text, email)
-        competences = self.extract_competences(text)
-
-        ville, pays = "Non spécifiée", "Non spécifié"
-        if "Nouakchott" in text:
-            ville, pays = "Nouakchott", "Mauritanie"
-
-        if not email:
-            print(f"⚠️ Aucun email trouvé pour {nom} {prenom}. CV ignoré.")
+    def process_pdf(self, path):
+        """Traitement principal du PDF"""
+        doc = fitz.open(path)
+        text = self.extract_text(doc)
+        
+        if not text:
+            self.stdout.write("Aucun texte détecté - Vérifier le format du PDF")
             return None
 
-        print(f"✅ Nom: {nom}, Prénom: {prenom}, Email: {email}, Téléphone: {telephone}")
-        print(f"🌍 Pays: {pays}, 🏙️ Ville: {ville}")
-        print(f"📌 Compétences: {competences}")
+        return self.parse_cv_data(text)
+
+    def extract_text(self, doc):
+        """Extraction du texte avec OCR amélioré"""
+        text = "\n".join(page.get_text("text") for page in doc)
+        
+        if not text.strip() and OCR_AVAILABLE:
+            self.stdout.write("Utilisation de l'OCR...")
+            text = self.ocr_processing(doc)
+        
+        return self.clean_text(text)
+
+    def ocr_processing(self, doc):
+        """Traitement OCR avancé"""
+        full_text = ""
+        for page in doc:
+            pix = page.get_pixmap(dpi=300)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # Prétraitement d'image
+            img = img.convert("L")
+            img = ImageEnhance.Contrast(img).enhance(3.0)
+            img = ImageEnhance.Sharpness(img).enhance(2.0)
+            
+            # Configuration Tesseract
+            config = (
+                "-l fra+ara+eng --oem 3 --psm 6 "
+                "-c tessedit_char_whitelist=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@.-_àéèêëïîôùûçâäÀÉÈÊËÏÎÔÙÛÇÂÄ"
+            )
+            
+            text = pytesseract.image_to_string(img, config=config)
+            full_text += text + "\n"
+        
+        return full_text
+
+    def clean_text(self, text):
+        """Nettoyage du texte pour l'analyse"""
+        replacements = [
+            (r"\s+", " "),
+            (r"\s?[@\.]\s?", lambda m: m.group().strip()),
+            (r"ﬁ", "fi"),
+            (r"ﬂ", "fl"),
+        ]
+        
+        for pattern, replacement in replacements:
+            text = re.sub(pattern, replacement, text)
+            
+        return text.strip()
+
+    def parse_cv_data(self, text):
+        """Extraction des données CV"""
+        email = self.extract_email(text)
+        phone = self.extract_phone(text)
+        nom, prenom = self.extract_name(text, email)
+        ville, pays = self.extract_location(text)
+        competences = self.extract_skills(text)
+
+        if not email:
+            self.stdout.write("Aucun email détecté - CV ignoré")
+            return None
 
         return {
+            "email": email,
             "nom": nom,
             "prenom": prenom,
-            "email": email,
-            "telephone": telephone,
+            "telephone": phone,
             "ville": ville,
             "pays": pays,
-            "competences": competences
+            "competences": competences,
         }
 
-    def extract_text_with_ocr(self, doc):
-        """Utilisation de l'OCR si aucun texte n'est extrait"""
-        text = ""
-        for page_num in range(len(doc)):
-            pix = doc[page_num].get_pixmap()
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            text += pytesseract.image_to_string(img, lang="fra+eng") + "\n"
-        return text
-
     def extract_email(self, text):
-        """Extraction de l'email avec validation du format"""
-        email_match = re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", text)
-        return email_match.group(0) if email_match else "inconnu@example.com"
+        """Détection robuste d'email"""
+        email_regex = r"""
+            (?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+
+            (?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*
+            |"
+            (?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]
+            |\\[\x01-\x09\x0b\x0c\x0e-\x7f])*"
+            )@
+            (?:(?:[a-z0-9]
+            (?:[a-z0-9-]*[a-z0-9])?
+            \.)+
+            [a-z0-9]
+            (?:[a-z0-9-]*[a-z0-9])?
+            |\[
+            (?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}
+            (?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)
+            \])
+        """
+        match = re.search(email_regex, text, re.VERBOSE | re.IGNORECASE)
+        return match.group(0).lower() if match else None
 
     def extract_phone(self, text):
-        """Extraction du téléphone"""
-        phone_match = re.search(r"(?:\+?222)?[\s-]*(\d{2}[\s-]*){4}", text)
-        return phone_match.group(0).replace(" ", "") if phone_match else "Non spécifié"
+        """Détection des numéros Mauritaniens"""
+        patterns = [
+            r"(?:\+?222|00222)[\s-]?(\d{2}[\s-]?){3}\d{2}",  # International
+            r"(?:06|07|05|02)[\s-]?(\d{2}[\s-]?){3}\d{2}",    # National
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return re.sub(r"\s|-", "", match.group())
+        return "Non spécifié"
 
-    def extract_name_spacy(self, text, email=None):
-        """Utilisation de SpaCy pour détecter le nom et prénom"""
-        doc = nlp(text)
-        noms_detectes = []
-
-        for ent in doc.ents:
-            if ent.label_ == "PER":
-                noms_detectes.append(ent.text)
-
-        name_match = re.search(r"(?i)(Nom[:\s]+)([A-ZÀ-ÿ][a-zà-ÿ]+)", text)
-        first_name_match = re.search(r"(?i)(Prénom[:\s]+)([A-ZÀ-ÿ][a-zà-ÿ]+)", text)
-
-        if name_match and first_name_match:
-            return name_match.group(2), first_name_match.group(2)
-
-        if email and not noms_detectes:
-            username = email.split("@")[0]
-            username_parts = re.split(r'[._-]', username)
-            if len(username_parts) >= 2:
-                return username_parts[0].capitalize(), username_parts[1].capitalize()
-
-        first_lines = "\n".join(text.split('\n')[:5])
-        capitalized_names = re.findall(r"\b[A-ZÀ-ÿ][a-zà-ÿ]+\b", first_lines)
-        if len(capitalized_names) >= 2:
-            return capitalized_names[0], capitalized_names[1]
-
-        if noms_detectes:
-            name_parts = noms_detectes[0].split()
-            if len(name_parts) >= 2:
-                return name_parts[0], " ".join(name_parts[1:])
-
-        return "Inconnu", "Inconnu"
-
-    def extract_competences(self, text):
-        """Détection des compétences techniques"""
-        competences_match = re.findall(
-            r"\b(Flask|PHP|Python|Django|Git|GitHub|Docker|MySQL|MongoDB|Java|Spring Boot|Angular|Machine Learning|AWS|Oracle|HTML|CSS|React|Typescript)\b",
-            text, re.IGNORECASE
+    def extract_name(self, text, email):
+        """Extraction des noms avec priorité CV"""
+        # Stratégie avancée : utiliser le prénom et le nom à partir des patterns détectés
+        name_match = re.search(
+            r"(?i)(?:nom|name)[\s:]*([A-ZÉÈÇÀÂÊÎÔÛËÏÖÜ][a-zéèçàâêîôûëïöüÿæœ]+)[\s,]+([A-ZÉÈÇÀÂÊÎÔÛËÏÖÜ][a-zéèçàâêîôûëïöüÿæœ]+)",
+            text,
         )
-        return list(set([c.strip() for c in competences_match if c.strip()]))
+        if name_match:
+            return name_match.group(1), name_match.group(2)
 
-    def save_cv_to_db(self, cv_data):
-        """Sauvegarde les informations extraites en base de données"""
+        # Si le CV contient un email, nous extrayons aussi le nom de l'email
+        if email:
+            username = email.split("@")[0]
+            parts = re.split(r"[._-]", username)
+            if len(parts) >= 2:
+                return parts[0].capitalize(), parts[1].capitalize()
+        
+        return ("Inconnu", "Inconnu")
+
+    def extract_location(self, text):
+        """Détection de la localisation"""
+        for city, country in CITY_COUNTRY_MAP.items():
+            if re.search(rf"\b{re.escape(city)}\b", text, re.IGNORECASE):
+                return city, country
+        return ("Non spécifié", "Mauritanie")
+
+    def extract_skills(self, text):
+        """Détection des compétences"""
+        skills = [
+            "Python", "Django", "Flask", "Java", "JavaScript",
+            "React", "Angular", "PHP", "Laravel", "SQL",
+            "PostgreSQL", "MongoDB", "Docker", "Git", "AWS",
+            "Machine Learning", "Data Analysis", "Power BI",
+        ]
+        return [skill for skill in skills if re.search(rf"\b{skill}\b", text, re.IGNORECASE)]
+
+    def save_consultant(self, data):
+        """Sauvegarde en base de données"""
         try:
             with transaction.atomic():
                 consultant, created = Consultant.objects.update_or_create(
-                    email=cv_data["email"],
+                    email=data["email"],
                     defaults={
-                        "nom": cv_data["nom"],
-                        "prenom": cv_data["prenom"],
-                        "telephone": cv_data["telephone"],
-                        "ville": cv_data["ville"],
-                        "pays": cv_data["pays"],
+                        "nom": data["nom"],
+                        "prenom": data["prenom"],
+                        "telephone": data["telephone"],
+                        "ville": data["ville"],
+                        "pays": data["pays"],
                         "date_debut_dispo": parse_date("2024-01-01"),
                         "date_fin_dispo": parse_date("2024-12-31"),
-                    }
+                    },
                 )
 
-                print(f"✅ Consultant {cv_data['nom']} {cv_data['prenom']} {'ajouté' if created else 'mis à jour'}.")
+                for competence in data["competences"]:
+                    Competence.objects.get_or_create(
+                        consultant=consultant,
+                        nom_competence=competence,
+                        defaults={"niveau": 2},
+                    )
 
-                if consultant and consultant.id:
-                    competences_objs = [
-                        Competence.objects.get_or_create(nom_competence=comp)[0]
-                        for comp in cv_data["competences"]
-                    ]
-                    consultant.competences.set(competences_objs)
-                    print("🎯 Compétences enregistrées.")
-                else:
-                    print("❌ Impossible d'enregistrer les compétences : Consultant non trouvé.")
-
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"{'Créé' if created else 'Mis à jour'} : "
+                        f"{data['prenom']} {data['nom']}"
+                    )
+                )
         except Exception as e:
-            print(f"❌ Erreur lors de l'enregistrement du consultant : {e}")
+            self.stdout.write(self.style.ERROR(f"Erreur DB: {str(e)}"))
